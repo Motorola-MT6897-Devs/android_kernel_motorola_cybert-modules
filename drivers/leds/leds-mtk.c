@@ -297,6 +297,50 @@ unlock:
 }
 static DEVICE_ATTR_RW(led_type);
 
+static ssize_t hbm_mode_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	/* Just return 0, we only care about writing */
+	return sprintf(buf, "0\n");
+}
+
+static ssize_t hbm_mode_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct led_conf_info *led_conf =
+		container_of(led_cdev, struct led_conf_info, cdev);
+	struct mt_led_data *led_dat =
+		container_of(led_conf, struct mt_led_data, conf);
+	unsigned long state;
+	int ret;
+
+	ret = kstrtoul(buf, 10, &state);
+	if (ret)
+		return ret;
+
+	if (state == 1) {
+		pr_info("%s: UDFPS HBM ON (via sysfs)\n", __func__);
+		mutex_lock(&led_dat->led_access);
+		/* Magic Value for HBM ON: 4294967294 */
+		led_dat->mtk_hw_brightness_set(led_dat, 4294967294U, 0, 1 << SET_BACKLIGHT_LEVEL);
+		led_dat->last_hw_brightness = 4294967294U;
+		mutex_unlock(&led_dat->led_access);
+	} else if (state == 0) {
+		pr_info("%s: UDFPS HBM OFF (via sysfs)\n", __func__);
+		mutex_lock(&led_dat->led_access);
+		/* Magic Value for HBM OFF: 4294967293 */
+		led_dat->mtk_hw_brightness_set(led_dat, 4294967293U, 0, 1 << SET_BACKLIGHT_LEVEL);
+		// Don't update last_hw_brightness to magic value on OFF, so normal refresh works better?
+		// Actually, let's keep it consistent.
+		led_dat->last_hw_brightness = 4294967293U;
+		mutex_unlock(&led_dat->led_access);
+	}
+
+	return size;
+}
+static DEVICE_ATTR_RW(hbm_mode);
+
 
 /****************************************************************************
  * DEBUG MACROS
@@ -547,6 +591,7 @@ int mt_leds_parse_dt(struct mt_led_data *mdev, struct fwnode_handle *fwnode)
 		pr_info("No max-brightness, use max_hw_brightness");
 		mdev->conf.cdev.max_brightness = mdev->conf.max_hw_brightness;
 	}
+
 	mdev->conf.logic_max_brightness = mdev->conf.cdev.max_brightness;
 
 	ret = fwnode_property_read_u32(fwnode,
@@ -624,6 +669,7 @@ static struct attribute *led_class_attrs[] = {
 	&dev_attr_connector_id.attr,
 	&dev_attr_logic_max_brightness.attr,
 	&dev_attr_led_type.attr,
+	&dev_attr_hbm_mode.attr,
 	NULL,
 };
 

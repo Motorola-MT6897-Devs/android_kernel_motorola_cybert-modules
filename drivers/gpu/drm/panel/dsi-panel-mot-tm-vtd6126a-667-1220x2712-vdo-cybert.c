@@ -895,14 +895,71 @@ static int lcm_setbacklight_cmdq(void *dsi, dcs_write_gce cb,
 	unsigned int aod_light_mode = 0;
 	static unsigned int current_aod_light_mode = 0;
 
-	/*if (atomic_read(&ctx->hbm_mode) && level) {
-		pr_info("hbm_mode = %d, skip backlight(%d)\n", atomic_read(&ctx->hbm_mode), level);
-		atomic_set(&ctx->current_backlight, level);
-		return 0;
-	}*/
-
 	if (!cb)
 		return -1;
+
+	/* HBM Interception for UDFPS */
+	if (level == 4294967294 || level == 4294967293) {
+		uint32_t hbm_state = (level == 4294967294) ? 2 : 0;
+		unsigned int bl_level_local;
+
+		/* Safety: Check ctx is valid and LHBM is enabled */
+		if (!ctx || !ctx->lhbm_en) {
+			pr_err("%s: UDFPS HBM request but ctx=%p lhbm_en=%d\n",
+			       __func__, ctx, ctx ? ctx->lhbm_en : 0);
+			return -EINVAL;
+		}
+
+		bl_level_local = atomic_read(&ctx->current_bl);
+		pr_info("%s UDFPS HBM Magic Value detected: %u (State: %d) BL: %d\n",
+			__func__, level, hbm_state, bl_level_local);
+
+		/* Send LHBM commands using raw callback */
+		if (hbm_state == 2) {
+			/* LHBM ON: Send panel_lhbm_on commands */
+			unsigned int alpha;
+			char lhbm_on_cmd1[] = {0x63, 0x0f, 0xff, 0x0f, 0xa0};
+			char lhbm_on_cmd2[] = {0x62, 0x03};
+
+			/* Calculate alpha based on bl_level (clamp to 0x10AF) */
+			if (bl_level_local <= 0x10AF && bl_level_local > 0) {
+				alpha = lhbm_alpha[bl_level_local];
+				lhbm_on_cmd1[1] = (alpha >> 8) & 0xFF;
+				lhbm_on_cmd1[2] = alpha & 0xFF;
+				lhbm_on_cmd1[3] = 0x10;
+				lhbm_on_cmd1[4] = 0xB0;
+			} else {
+				lhbm_on_cmd1[1] = 0x10;
+				lhbm_on_cmd1[2] = 0x00;
+				lhbm_on_cmd1[3] = (bl_level_local >> 8) & 0xFF;
+				lhbm_on_cmd1[4] = bl_level_local & 0xFF;
+			}
+
+			cb(dsi, handle, lhbm_on_cmd1, sizeof(lhbm_on_cmd1));
+			cb(dsi, handle, lhbm_on_cmd2, sizeof(lhbm_on_cmd2));
+		} else {
+			/* LHBM OFF: Send panel_lhbm_off commands */
+			char lhbm_off_cmd1[] = {0x62, 0x00};
+			char lhbm_off_cmd2[] = {0x51, 0x03, 0xff};
+
+			/* Restore backlight level */
+			lhbm_off_cmd2[1] = (bl_level_local >> 8) & 0xFF;
+			lhbm_off_cmd2[2] = bl_level_local & 0xFF;
+
+			cb(dsi, handle, lhbm_off_cmd1, sizeof(lhbm_off_cmd1));
+			cb(dsi, handle, lhbm_off_cmd2, sizeof(lhbm_off_cmd2));
+		}
+
+		atomic_set(&ctx->hbm_mode, hbm_state);
+		return 0;
+	}
+
+	/* Block normal backlight updates during HBM */
+	if (atomic_read(&ctx->hbm_mode) && level) {
+		pr_info("hbm_mode = %d, skip backlight(%d)\n", atomic_read(&ctx->hbm_mode), level);
+		atomic_set(&ctx->current_bl, level);
+		return 0;
+	}
 
 	printk("%s enter  \n",__func__);
 	printk("%s backlight level = %d  \n",__func__,level);
