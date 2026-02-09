@@ -17,6 +17,17 @@
 #include <linux/string.h>
 #include <leds-mtk.h>
 
+/* DRM panel HBM function - exported from mediatek DRM driver */
+/* DRM panel HBM function callback */
+static int (*g_hbm_cb)(int connector_id, void *drm_dev, bool enable);
+
+int mtk_leds_register_hbm_cb(int (*cb)(int connector_id, void *drm_dev, bool enable))
+{
+	g_hbm_cb = cb;
+	return 0;
+}
+EXPORT_SYMBOL(mtk_leds_register_hbm_cb);
+
 
 /****************************************************************************
  * variables
@@ -310,8 +321,7 @@ static ssize_t hbm_mode_store(struct device *dev,
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
 	struct led_conf_info *led_conf =
 		container_of(led_cdev, struct led_conf_info, cdev);
-	struct mt_led_data *led_dat =
-		container_of(led_conf, struct mt_led_data, conf);
+
 	unsigned long state;
 	int ret;
 
@@ -319,22 +329,18 @@ static ssize_t hbm_mode_store(struct device *dev,
 	if (ret)
 		return ret;
 
-	if (state == 1) {
-		pr_info("%s: UDFPS HBM ON (via sysfs)\n", __func__);
-		mutex_lock(&led_dat->led_access);
-		/* Magic Value for HBM ON: 4294967294 */
-		led_dat->mtk_hw_brightness_set(led_dat, 4294967294U, 0, 1 << SET_BACKLIGHT_LEVEL);
-		led_dat->last_hw_brightness = 4294967294U;
-		mutex_unlock(&led_dat->led_access);
-	} else if (state == 0) {
-		pr_info("%s: UDFPS HBM OFF (via sysfs)\n", __func__);
-		mutex_lock(&led_dat->led_access);
-		/* Magic Value for HBM OFF: 4294967293 */
-		led_dat->mtk_hw_brightness_set(led_dat, 4294967293U, 0, 1 << SET_BACKLIGHT_LEVEL);
-		// Don't update last_hw_brightness to magic value on OFF, so normal refresh works better?
-		// Actually, let's keep it consistent.
-		led_dat->last_hw_brightness = 4294967293U;
-		mutex_unlock(&led_dat->led_access);
+	if (state == 1 || state == 0) {
+		pr_info("%s: UDFPS HBM %s (via sysfs callback)\n",
+			__func__, state ? "ON" : "OFF");
+		
+		if (g_hbm_cb) {
+			/* Call registered DRM callback */
+			ret = g_hbm_cb(led_conf->connector_id, NULL, state == 1);
+			if (ret)
+				pr_err("%s: Failed to set HBM: %d\n", __func__, ret);
+		} else {
+			pr_warn("%s: HBM callback not registered yet\n", __func__);
+		}
 	}
 
 	return size;

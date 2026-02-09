@@ -57,6 +57,7 @@
 #include "mtk_drm_arr.h"
 #include "mtk_drm_trace.h"
 #include "cmdq-util.h"
+#include <linux/leds-mtk.h>
 #include "mtk_disp_ccorr.h"
 #include "mtk_disp_pq_helper.h"
 #include "mtk_debug.h"
@@ -116,6 +117,7 @@ static struct mtk_drm_property mtk_crtc_property[CRTC_PROP_MAX] = {
 static struct cmdq_pkt *sb_cmdq_handle;
 static unsigned int sb_backlight;
 static unsigned int cur_backlight = 0;
+static struct drm_device *g_hbm_drm_dev;  /* For HBM sysfs access from LED driver */
 
 struct timespec64 atomic_flush_tval;
 struct timespec64 rdma_sof_tval;
@@ -2445,6 +2447,52 @@ int mtk_drm_crtc_set_panel_feature(struct drm_crtc *crtc, struct panel_param_inf
 	cmdq_pkt_destroy(cmdq_handle);
 	DDP_MUTEX_UNLOCK(&mtk_crtc->lock, __func__, __LINE__);
 	return ret;
+}
+
+/*
+ * mtk_drm_set_hbm_by_connector - Set HBM state via connector ID
+ * @connector_id: Connector ID from LED driver
+ * @drm_dev: DRM device pointer
+ * @enable: true for HBM ON (LHBM), false for HBM OFF
+ *
+ * This function is exported for use by the LED driver to properly
+ * set HBM through the DRM panel feature API with correct cmdq setup.
+ * Returns 0 on success, negative errno on failure.
+ */
+/*
+ * HBM Callback wrapper for leds-mtk
+ */
+static int mtk_drm_set_hbm_callback(int connector_id, void *drm_dev, bool enable)
+{
+	struct drm_crtc *crtc;
+	struct panel_param_info param_info;
+	struct drm_device *dev = (struct drm_device *)drm_dev;
+
+	/* Use global drm_dev if not provided */
+	if (!dev)
+		dev = g_hbm_drm_dev;
+
+	if (!dev) {
+		pr_err("%s: drm_dev is NULL (not initialized yet)\n", __func__);
+		return -EINVAL;
+	}
+
+	/* Get crtc from connector_id */
+	crtc = get_crtc_from_connector(connector_id, dev);
+	if (!crtc) {
+		pr_err("%s: failed to get crtc from connector_id %d\n",
+		       __func__, connector_id);
+		return -ENODEV;
+	}
+
+	/* Set HBM parameter: 2 = LHBM ON, 0 = OFF */
+	param_info.param_idx = PARAM_HBM;
+	param_info.value = enable ? 2 : 0;
+
+	pr_info("%s: Setting HBM %s via connector %d\n",
+		__func__, enable ? "ON" : "OFF", connector_id);
+
+	return mtk_drm_crtc_set_panel_feature(crtc, param_info);
 }
 
 int mtk_drm_crtc_hbm_wait(struct drm_crtc *crtc, bool en)
@@ -17888,6 +17936,13 @@ int mtk_drm_crtc_create(struct drm_device *drm_dev,
 
 	if (!path_data)
 		return 0;
+
+	/* Store drm_dev for HBM access via sysfs (LED driver) */
+	if (!g_hbm_drm_dev)
+		g_hbm_drm_dev = drm_dev;
+
+	/* Register HBM callback with LED driver */
+	mtk_leds_register_hbm_cb(mtk_drm_set_hbm_callback);
 
 	for_each_comp_id_in_path_data(comp_id, path_data, i, j, p_mode) {
 		struct device_node *node;

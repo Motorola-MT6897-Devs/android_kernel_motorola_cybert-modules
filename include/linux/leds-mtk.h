@@ -57,3 +57,5 @@ int mtk_leds_register_notifier(struct notifier_block *nb);
 int mtk_leds_unregister_notifier(struct notifier_block *nb);
 int mtk_leds_brightness_set(int connector_id, int level, unsigned int params, unsigned int params_flag);
 int setMaxBrightness(int connector_id, int percent, bool enable);
+
+int mtk_leds_register_hbm_cb(int (*cb)(int connector_id, void *drm_dev, bool enable));

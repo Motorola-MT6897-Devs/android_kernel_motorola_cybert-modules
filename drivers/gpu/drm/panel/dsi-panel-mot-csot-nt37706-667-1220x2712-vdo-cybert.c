@@ -901,68 +901,6 @@ static int lcm_setbacklight_cmdq(void *dsi, dcs_write_gce cb, void *handle,
 	if (!cb)
 		return -1;
 
-	/* HBM Interception for UDFPS */
-	if (level == 4294967294 || level == 4294967293) {
-		uint32_t hbm_state = (level == 4294967294) ? 2 : 0;
-		unsigned int bl_level_local;
-
-		/* Safety: Check ctx is valid and LHBM is enabled */
-		if (!ctx || !ctx->lhbm_en) {
-			pr_err("%s: UDFPS HBM request but ctx=%p lhbm_en=%d\n",
-			       __func__, ctx, ctx ? ctx->lhbm_en : 0);
-			return -EINVAL;
-		}
-
-		bl_level_local = atomic_read(&ctx->current_bl);
-		pr_info("%s UDFPS HBM Magic Value detected: %u (State: %d) BL: %d\n",
-			__func__, level, hbm_state, bl_level_local);
-
-		if (hbm_state == 2) {
-			/* LHBM ON: Send panel_lhbm_on command (44 bytes) */
-			char lhbm_on_cmd[] = {0xA9, 0x02, 0x00, 0xC0, 0x2E, 0x2F, 0x32, 0x60,
-					     0x02, 0x00, 0xC0, 0x30, 0x33, 0x09, 0x99, 0x00,
-					     0x88, 0x02, 0x00, 0xC7, 0x01, 0x01, 0x09, 0x01,
-					     0x00, 0x5F, 0x00, 0x01, 0x00, 0x40, 0x01, 0x00,
-					     0x8B, 0x00, 0x00, 0x10, 0x01, 0x00, 0x87, 0x00,
-					     0x02, 0x25, 0xbe, 0x80};
-
-			/* Calculate alpha and update bytes 42-43 */
-			unsigned int alpha_idx = (bl_level_local > 16000) ? 15999 : bl_level_local;
-			unsigned int alpha = lhbm_alpha[alpha_idx];
-			lhbm_on_cmd[42] = (alpha >> 8) & 0xFF;
-			lhbm_on_cmd[43] = alpha & 0xFF;
-
-			cb(dsi, handle, lhbm_on_cmd, sizeof(lhbm_on_cmd));
-		} else {
-			/* LHBM OFF: Send panel_lhbm_off commands */
-			char lhbm_off_cmd1[] = {0xA9, 0x01, 0x00, 0x5F, 0x00, 0x01, 0x00, 0x00,
-						0x01, 0x00, 0x51, 0x00, 0x01, 0x3E, 0x80, 0x01,
-						0x00, 0x51, 0x04, 0x05, 0x05, 0x54};
-			char lhbm_off_cmd2[] = {0xA9, 0x02, 0x00, 0xC0, 0x2E, 0x2F, 0x32, 0x60,
-						0x02, 0x00, 0xC0, 0x30, 0x33, 0x04, 0x57, 0x00,
-						0x88, 0x02, 0x00, 0xC7, 0x01, 0x01, 0x01, 0x01,
-						0x00, 0x5F, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00,
-						0x8B, 0x00, 0x00, 0x00, 0x01, 0x00, 0x87, 0x00,
-						0x00, 0x20};
-
-			/* Restore backlight in lhbm_off_cmd1 (using fill_backlight_cmd logic) */
-			fill_backlight_cmd(bl_level_local, lhbm_off_cmd1);
-
-			cb(dsi, handle, lhbm_off_cmd1, sizeof(lhbm_off_cmd1));
-			cb(dsi, handle, lhbm_off_cmd2, sizeof(lhbm_off_cmd2));
-		}
-
-		atomic_set(&ctx->hbm_mode, hbm_state);
-		return 0;
-	}
-
-	/* Block normal backlight updates during HBM */
-	if (atomic_read(&ctx->hbm_mode) && level) {
-		pr_info("hbm_mode = %d, skip backlight(%d)\n", atomic_read(&ctx->hbm_mode), level);
-		atomic_set(&ctx->current_bl, level);
-		return 0;
-	}
-
 	fill_backlight_cmd(level, bl_tb_aod_apl);
 
 	cb(dsi, handle, bl_tb_aod_apl, ARRAY_SIZE(bl_tb_aod_apl));
@@ -981,8 +919,6 @@ static int lcm_setbacklight_cmdq(void *dsi, dcs_write_gce cb, void *handle,
 		pr_debug("backlight changed from %u to %u\n", atomic_read(&ctx->current_bl), level);
 
 	atomic_set(&ctx->current_bl, level);
-	if (!level)
-		atomic_set(&ctx->hbm_mode, 0);
 	return 0;
 }
 
@@ -1135,7 +1071,6 @@ static int panel_lhbm_set_cmdq(struct lcm *ctx, void *dsi, dcs_grp_write_gce cb,
 	struct mtk_panel_para_table *pTable;
 
 	if (on) {
-
 		if(ctx->version  < 3) {
 			para_count = sizeof(panel_lhbm_on) / sizeof(struct mtk_panel_para_table);
 			pTable = panel_lhbm_on;
@@ -1143,7 +1078,8 @@ static int panel_lhbm_set_cmdq(struct lcm *ctx, void *dsi, dcs_grp_write_gce cb,
 			para_count = sizeof(panel_lhbm_on_v3) / sizeof(struct mtk_panel_para_table);
 			pTable = panel_lhbm_on_v3;
 		}
-		set_lhbm_alpha(ctx, bl_level, pTable);
+		/* Use peak illumination for UDFPS HBM */
+		set_lhbm_alpha(ctx, 15999, pTable);
 	} else {
 		if(ctx->version  < 3) {
 			para_count = sizeof(panel_lhbm_off) / sizeof(struct mtk_panel_para_table);
