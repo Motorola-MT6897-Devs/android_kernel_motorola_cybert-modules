@@ -1059,10 +1059,13 @@ static int panel_lhbm_set_cmdq(void *dsi, dcs_grp_write_gce cb, void *handle, ui
 			
 		// Preserve Global Backlight (Bytes 3-4) to avoid whole-panel brightness jumps
 		// Use 0x3F mask for MSB to match lcm_setbacklight_cmdq behavior
-		pTable_alpha->para_list[3] = (bl_level >> 8) & 0x3F;
-		pTable_alpha->para_list[4] = bl_level & 0xFF;
+		// Safety: If bl_level is 0 (uninitialized), use 6144 (~37%) to match boot brightness
+		uint32_t safe_bl = (bl_level == 0) ? 6144 : bl_level;
+		
+		pTable_alpha->para_list[3] = (safe_bl >> 8) & 0x3F;
+		pTable_alpha->para_list[4] = safe_bl & 0xFF;
 
-		pr_info("%s: backlight %d alpha_hbm %d(0x%x, 0x%x)\n", __func__, bl_level, alpha, pTable_alpha->para_list[1], pTable_alpha->para_list[2]);
+		pr_info("%s: backlight %d(safe=%d) alpha_hbm %d(0x%x, 0x%x)\n", __func__, bl_level, safe_bl, alpha, pTable_alpha->para_list[1], pTable_alpha->para_list[2]);
 
 		para_count = sizeof(panel_lhbm_on) / sizeof(struct mtk_panel_para_table);
 		pTable = panel_lhbm_on;
@@ -1071,13 +1074,15 @@ static int panel_lhbm_set_cmdq(void *dsi, dcs_grp_write_gce cb, void *handle, ui
 
 	} else {
 		pTable_alpha = &panel_lhbm_off[1];
-		pTable_alpha->para_list[1] = (bl_level >> 8) & 0x3F;
-		pTable_alpha->para_list[2] = bl_level & 0xFF;
+		// Safety: If bl_level is 0 (uninitialized), restore to 6144 (~37%) to avoid dim screen
+		uint32_t safe_bl = (bl_level == 0) ? 6144 : bl_level;
+		pTable_alpha->para_list[1] = (safe_bl >> 8) & 0x3F;
+		pTable_alpha->para_list[2] = safe_bl & 0xFF;
 
 		para_count = sizeof(panel_lhbm_off) / sizeof(struct mtk_panel_para_table);
 		pTable = panel_lhbm_off;
 			
-		pr_info("%s: Disabling LHBM (bl_level=%d)\n", __func__, bl_level);
+		pr_info("%s: Disabling LHBM (bl_level=%d, restore=%d)\n", __func__, bl_level, safe_bl);
 		cb(dsi, handle, pTable, para_count);
 	}
 	return 0;

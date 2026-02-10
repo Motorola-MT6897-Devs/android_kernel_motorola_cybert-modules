@@ -1081,6 +1081,9 @@ static int panel_lhbm_set_cmdq(struct lcm *ctx, void *dsi, dcs_grp_write_gce cb,
 		/* Use peak illumination for UDFPS HBM */
 		set_lhbm_alpha(ctx, 15999, pTable);
 	} else {
+		// Safety: If bl_level is 0 (uninitialized), restore to 6144 (~37%) to avoid dim screen
+		uint32_t safe_bl = (bl_level == 0) ? 6144 : bl_level;
+
 		if(ctx->version  < 3) {
 			para_count = sizeof(panel_lhbm_off) / sizeof(struct mtk_panel_para_table);
 			pTable = panel_lhbm_off;
@@ -1093,8 +1096,8 @@ static int panel_lhbm_set_cmdq(struct lcm *ctx, void *dsi, dcs_grp_write_gce cb,
 				pTable = panel_lhbm_off_v3;
 			}
 		}
-		fill_backlight_cmd(bl_level, pTable->para_list);
-		pr_info("%s restore bl to %u ", __func__, bl_level);
+		fill_backlight_cmd(safe_bl, pTable->para_list);
+		pr_info("%s restore bl to %u(safe=%u) ", __func__, bl_level, safe_bl);
 	}
 	cb(dsi, handle, pTable, para_count);
 	return 0;
